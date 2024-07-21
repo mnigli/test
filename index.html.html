@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מדרג הסלוגנים העברי</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            width: 350px;
+        }
+        .card-title {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #result {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1 class="card-title">מדרג הסלוגנים העברי</h1>
+        <div class="input-group">
+            <label for="productType">סוג המוצר</label>
+            <input id="productType" placeholder="הכנס את סוג המוצר">
+        </div>
+        <div class="input-group">
+            <label for="productKeywords">מילות מפתח הקשורות למוצר (מופרדות בפסיקים)</label>
+            <textarea id="productKeywords" placeholder="לדוגמה: איכות, חדשנות, נוחות"></textarea>
+        </div>
+        <div class="input-group">
+            <label for="slogan">סלוגן</label>
+            <input id="slogan" placeholder="הכנס את הסלוגן שלך">
+        </div>
+        <button onclick="rateSlogan()">דרג את הסלוגן</button>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        const commonHebrewWords = ['של', 'את', 'על', 'עם', 'זה', 'לא', 'כי', 'מה', 'אם', 'רק', 'גם', 'כל', 'יש', 'אין'];
+
+        function rateSlogan() {
+            const productType = document.getElementById('productType').value;
+            const productKeywords = document.getElementById('productKeywords').value;
+            const slogan = document.getElementById('slogan').value;
+            const words = slogan.split(/\s+/);
+            const keywordList = productKeywords.split(',').map(k => k.trim().toLowerCase());
+            let score = 0;
+            let feedbackPoints = [];
+
+            // 1. אורך אופטימלי
+            if (words.length >= 3 && words.length <= 7) {
+                score += 15;
+                feedbackPoints.push("אורך אופטימלי");
+            } else {
+                score += 5;
+                feedbackPoints.push("אורך לא אופטימלי");
+            }
+
+            // 2. גיוון לשוני
+            const uniqueWords = new Set(words);
+            const linguisticDiversity = uniqueWords.size / words.length;
+            score += Math.round(linguisticDiversity * 20);
+            feedbackPoints.push(`גיוון לשוני: ${(linguisticDiversity * 100).toFixed(1)}%`);
+
+            // 3. שימוש במילות מפתח
+            const keywordCount = words.filter(word => !commonHebrewWords.includes(word)).length;
+            score += keywordCount * 3;
+            feedbackPoints.push(`${keywordCount} מילות מפתח`);
+
+            // 4. ניגודיות או הפתעה
+            if (slogan.includes('!') || slogan.includes('?')) {
+                score += 10;
+                feedbackPoints.push("שימוש בסימני פיסוק מעניינים");
+            }
+
+            // 5. משחקי מילים או כפל משמעות
+            const wordFrequency = words.reduce((acc, word) => {
+                acc[word] = (acc[word] || 0) + 1;
+                return acc;
+            }, {});
+            const repeatedWords = Object.values(wordFrequency).filter(count => count > 1).length;
+            score += repeatedWords * 5;
+            if (repeatedWords > 0) {
+                feedbackPoints.push("שימוש במשחקי מילים");
+            }
+
+            // 6. רלוונטיות למוצר (גישה מעודכנת)
+            const relevantWords = words.filter(word => 
+                keywordList.some(keyword => word.toLowerCase().includes(keyword))
+            );
+            const relevanceScore = Math.min(20, relevantWords.length * 5);
+            score += relevanceScore;
+            if (relevanceScore > 0) {
+                feedbackPoints.push(`הסלוגן מתייחס ל-${relevantWords.length} מושגים רלוונטיים למוצר`);
+            } else {
+                feedbackPoints.push("הסלוגן אינו מזכיר ישירות מושגים הקשורים למוצר, אך זה לא בהכרח חיסרון");
+            }
+
+            // 7. מצלול
+            const rhymingWords = words.filter((word, index) => 
+                index > 0 && word.slice(-2) === words[index-1].slice(-2)
+            ).length;
+            score += rhymingWords * 5;
+            if (rhymingWords > 0) {
+                feedbackPoints.push("שימוש במצלול");
+            }
+
+            // 8. ניתוח סמנטי בסיסי
+            const positiveWords = ['טוב', 'מצוין', 'נהדר', 'איכותי', 'מדהים'];
+            const positiveCount = words.filter(word => positiveWords.includes(word.toLowerCase())).length;
+            score += positiveCount * 3;
+            if (positiveCount > 0) {
+                feedbackPoints.push(`הסלוגן משתמש ב-${positiveCount} מילים חיוביות`);
+            }
+
+            // נרמול הציון ל-95 מקסימום
+            score = Math.min(95, score);
+
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = `<strong>ציון: ${score}</strong><p>${feedbackPoints.join('. ')}</p>`;
+        }
+    </script>
+</body>
+</html>
