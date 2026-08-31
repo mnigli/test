@@ -1,0 +1,52 @@
+name: Shas full institution analysis
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/shas-full-analysis.yml'
+      - 'research/analyze_shas_institutions.py'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Apply aggregation fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('research/analyze_shas_institutions.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''    by_city = regular.assign(
+              נתפס_חזק=catch_strong,
+              נתפס_בינוני=catch_medium,
+          ).groupby("שם ישוב", as_index=False).agg(
+          '''
+          new = '''    regular["נתפס_חזק"] = catch_strong
+              regular["נתפס_בינוני"] = catch_medium
+              by_city = regular.groupby("שם ישוב", as_index=False).agg(
+          '''
+          if old not in s:
+              raise SystemExit('Expected aggregation block not found')
+          p.write_text(s.replace(old, new), encoding='utf-8')
+          PY
+      - name: Run full analysis
+        run: uv run research/analyze_shas_institutions.py
+      - name: List outputs
+        if: always()
+        run: find research/final_output -maxdepth 1 -type f -printf '%f %s bytes\n' || true
+      - name: Upload output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shas-full-analysis
+          path: research/final_output/
+          if-no-files-found: warn
+          retention-days: 7
