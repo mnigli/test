@@ -9,7 +9,7 @@ on:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/setup-python@v5
         with:
@@ -32,10 +32,12 @@ jobs:
             'data-manifest.json',
             'data/site-metadata.json',
             'data/institution_registry.json',
+            'data/institutions.json',
             'data/institutions_browse.json',
             'data/catalog_index.json',
             'data/networks_browse.json',
             'data/authorities.json',
+            'data/national_stats.json',
             'data/frame_browse_counts.json',
             'data/ownership_affiliations.json',
           ]
@@ -88,18 +90,20 @@ jobs:
                     vals=list(obj.values())
                     if vals and isinstance(vals[0],dict): records=vals; info['record_container']='dict_values'
                 if records:
-                  fields=Counter(); years=Counter(); supervision=Counter(); network=Counter(); types=Counter()
+                  fields=Counter(); years=Counter(); supervision=Counter(); network=Counter(); types=Counter(); studentkeys=Counter()
                   for row in records[:100000]:
                     if not isinstance(row,dict): continue
                     fields.update(row.keys())
                     for k,v in row.items():
                       kl=str(k).lower()
                       if 'year' in kl or 'שנה' in kl: years[str(v)] += 1
+                      if 'student' in kl or 'תלמיד' in kl: studentkeys[str(k)] += 1
                       if 'supervision' in kl or 'פיקוח' in kl: supervision[str(v)] += 1
                       if 'network' in kl or 'רשת' in kl or 'ownership' in kl: network[str(v)] += 1
                       if 'type' in kl or 'שלב' in kl or 'frame' in kl: types[str(v)] += 1
-                  info['record_fields']=fields.most_common(120)
-                  info['year_values']=years.most_common(40)
+                  info['record_fields']=fields.most_common(200)
+                  info['year_values']=years.most_common(80)
+                  info['student_keys']=studentkeys.most_common(100)
                   info['supervision_values']=supervision.most_common(40)
                   info['network_values']=network.most_common(40)
                   info['type_values']=types.most_common(40)
@@ -116,7 +120,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: eddata-files-browser
+          name: eddata-files-browser-full
           path: eddata_files/
-          retention-days: 5
+          retention-days: 7
           if-no-files-found: warn
