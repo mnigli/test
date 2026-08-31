@@ -1,0 +1,46 @@
+name: Inspect current education datasets
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/inspect-current-education.yml'
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Inspect data.gov.il education catalogue
+        run: |
+          python - <<'PY'
+          import json, requests
+          s=requests.Session(); s.headers['User-Agent']='education-research/1.0'
+          base='https://data.gov.il/api/3/action'
+          def get(path, **params):
+              r=s.get(base+'/'+path,params=params,timeout=120); print('URL',r.url,'STATUS',r.status_code); r.raise_for_status(); return r.json()['result']
+          result=get('package_search',fq='organization:ministry_of_education',rows=1000)
+          print('DATASETS',result['count'])
+          for d in result['results']:
+              print('DATASET',d.get('name'), '|', d.get('title'), '| modified',d.get('metadata_modified'))
+              for res in d.get('resources',[]):
+                  print(' RESOURCE',res.get('id'),'|',res.get('name'),'|',res.get('format'),'| ds',res.get('datastore_active'),'| modified',res.get('last_modified'),'| url',res.get('url'))
+          for dataset in ['school','mosdot','coordinates']:
+              try:
+                  d=get('package_show',id=dataset)
+                  print('PACKAGE_JSON_START',dataset)
+                  print(json.dumps(d,ensure_ascii=False,indent=2)[:100000])
+                  print('PACKAGE_JSON_END',dataset)
+                  for res in d.get('resources',[]):
+                      if res.get('datastore_active'):
+                          rid=res['id']
+                          sample=get('datastore_search',resource_id=rid,limit=5)
+                          print('SAMPLE_START',dataset,rid)
+                          print(json.dumps(sample,ensure_ascii=False,indent=2)[:60000])
+                          print('SAMPLE_END',dataset,rid)
+              except Exception as e:
+                  print('PACKAGE_ERROR',dataset,repr(e))
+          PY
