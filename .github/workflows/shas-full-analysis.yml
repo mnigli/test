@@ -22,20 +22,25 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path('research/analyze_shas_institutions.py')
           s = p.read_text(encoding='utf-8')
-          old = '''    by_city = regular.assign(
-              נתפס_חזק=catch_strong,
-              נתפס_בינוני=catch_medium,
-          ).groupby("שם ישוב", as_index=False).agg(
-          '''
-          new = '''    regular["נתפס_חזק"] = catch_strong
-              regular["נתפס_בינוני"] = catch_medium
-              by_city = regular.groupby("שם ישוב", as_index=False).agg(
-          '''
-          if old not in s:
-              raise SystemExit('Expected aggregation block not found')
-          p.write_text(s.replace(old, new), encoding='utf-8')
+          pattern = re.compile(
+              r'    by_city = regular\.assign\(\s*'
+              r'נתפס_חזק=catch_strong,\s*'
+              r'נתפס_בינוני=catch_medium,\s*'
+              r'\)\.groupby\("שם ישוב", as_index=False\)\.agg\('
+          )
+          replacement = (
+              '    regular["נתפס_חזק"] = catch_strong\n'
+              '    regular["נתפס_בינוני"] = catch_medium\n'
+              '    by_city = regular.groupby("שם ישוב", as_index=False).agg('
+          )
+          s2, n = pattern.subn(replacement, s, count=1)
+          if n != 1:
+              raise SystemExit(f'Expected one aggregation block, found {n}')
+          p.write_text(s2, encoding='utf-8')
           PY
       - name: Run full analysis
         run: uv run research/analyze_shas_institutions.py
