@@ -17,11 +17,23 @@ jobs:
       - name: Inspect data.gov.il education catalogue
         run: |
           python - <<'PY'
-          import json, requests
-          s=requests.Session(); s.headers['User-Agent']='education-research/1.0'
+          import json
+          import urllib.parse
+          import urllib.request
+
           base='https://data.gov.il/api/3/action'
+          opener=urllib.request.build_opener()
+          opener.addheaders=[('User-Agent','education-research/1.0'),('Accept','application/json')]
+
           def get(path, **params):
-              r=s.get(base+'/'+path,params=params,timeout=120); print('URL',r.url,'STATUS',r.status_code); r.raise_for_status(); return r.json()['result']
+              url=base+'/'+path+'?'+urllib.parse.urlencode(params)
+              print('URL',url)
+              with opener.open(url,timeout=120) as r:
+                  payload=json.load(r)
+              if not payload.get('success'):
+                  raise RuntimeError(payload)
+              return payload['result']
+
           result=get('package_search',fq='organization:ministry_of_education',rows=1000)
           print('DATASETS',result['count'])
           for d in result['results']:
