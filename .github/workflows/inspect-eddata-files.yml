@@ -1,0 +1,104 @@
+name: Inspect ED-DATA institution files
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/inspect-eddata-files.yml'
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download and inspect JSON datasets
+        run: |
+          mkdir -p eddata_files
+          python - <<'PY'
+          import json, re, urllib.request
+          from collections import Counter
+          from pathlib import Path
+
+          root='https://mos.eddata.live/'
+          paths=[
+            'data-manifest.json',
+            'data/site-metadata.json',
+            'data/institution_registry.json',
+            'data/institutions_browse.json',
+            'data/catalog_index.json',
+            'data/networks_browse.json',
+            'data/authorities.json',
+            'data/frame_browse_counts.json',
+            'data/ownership_affiliations.json',
+          ]
+          out=Path('eddata_files')
+          opener=urllib.request.build_opener()
+          opener.addheaders=[('User-Agent','Mozilla/5.0 research-bot'),('Accept','application/json')]
+
+          def summarize(obj):
+            s={'type':type(obj).__name__}
+            if isinstance(obj,list):
+              s['length']=len(obj); s['sample']=obj[:3]
+            elif isinstance(obj,dict):
+              s['length']=len(obj); s['keys']=list(obj)[:100]
+              s['sample']={k:obj[k] for k in list(obj)[:5]}
+              for k,v in obj.items():
+                if isinstance(v,list):
+                  s.setdefault('list_fields',{})[k]={'length':len(v),'sample':v[:2]}
+                elif isinstance(v,dict):
+                  s.setdefault('dict_fields',{})[k]={'length':len(v),'keys':list(v)[:20]}
+            return s
+
+          report={}
+          for path in paths:
+            url=root+path
+            try:
+              print('FETCH',url)
+              with opener.open(url,timeout=180) as r: raw=r.read()
+              dest=out/Path(path).name
+              dest.write_bytes(raw)
+              obj=json.loads(raw)
+              info=summarize(obj); info['bytes']=len(raw)
+              # Shallow record field inventory.
+              records=[]
+              if isinstance(obj,list): records=obj
+              elif isinstance(obj,dict):
+                for key in ['institutions','records','items','data','schools','rows']:
+                  if isinstance(obj.get(key),list): records=obj[key]; info['record_container']=key; break
+                if not records:
+                  # dictionary keyed by id
+                  vals=list(obj.values())
+                  if vals and isinstance(vals[0],dict): records=vals; info['record_container']='dict_values'
+              if records:
+                fields=Counter()
+                years=Counter(); supervision=Counter(); network=Counter(); types=Counter()
+                for row in records[:100000]:
+                  if not isinstance(row,dict): continue
+                  fields.update(row.keys())
+                  for k,v in row.items():
+                    kl=str(k).lower()
+                    if 'year' in kl or 'שנה' in kl: years[str(v)] += 1
+                    if 'supervision' in kl or 'פיקוח' in kl: supervision[str(v)] += 1
+                    if 'network' in kl or 'רשת' in kl or 'ownership' in kl: network[str(v)] += 1
+                    if 'type' in kl or 'שלב' in kl or 'frame' in kl: types[str(v)] += 1
+                info['record_fields']=fields.most_common(100)
+                info['year_values']=years.most_common(30)
+                info['supervision_values']=supervision.most_common(30)
+                info['network_values']=network.most_common(30)
+                info['type_values']=types.most_common(30)
+              report[path]=info
+            except Exception as e:
+              report[path]={'error':repr(e)}
+          (out/'inspection_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+          print('REPORT_START')
+          print(json.dumps(report,ensure_ascii=False,indent=2)[:250000])
+          print('REPORT_END')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eddata-files
+          path: eddata_files/
+          retention-days: 5
