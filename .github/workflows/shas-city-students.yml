@@ -1,0 +1,43 @@
+name: Shas city student analysis
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/shas-city-students.yml'
+      - 'research/analyze_shas_city_students.py'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - name: Run with official election datastore
+        run: |
+          cat > /tmp/run_city_model.py <<'PY'
+          import research.analyze_shas_city_students as model
+
+          def read_official_ballots():
+              frame, _ = model.fetch_datastore('cc223336-07bc-485d-b160-62df92967c0a')
+              return frame
+
+          model.read_ballots = read_official_ballots
+          model.main()
+          PY
+          uv run /tmp/run_city_model.py
+      - name: List outputs
+        if: always()
+        run: find research/city_student_output -maxdepth 1 -type f -printf '%f %s bytes\n' || true
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shas-city-student-analysis
+          path: research/city_student_output/
+          if-no-files-found: warn
+          retention-days: 7
