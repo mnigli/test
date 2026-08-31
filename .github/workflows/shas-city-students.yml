@@ -20,6 +20,9 @@ jobs:
       - name: Run with official election datastore
         run: |
           cat > /tmp/run_city_model.py <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, os.getcwd())
           import research.analyze_shas_city_students as model
 
           def read_official_ballots():
