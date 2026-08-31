@@ -20,17 +20,51 @@ jobs:
       - name: Run with official election and education datastores
         run: |
           cat > /tmp/run_city_model.py <<'PY'
+          import json
           import os
           import sys
+          import requests
+          import pandas as pd
+
           sys.path.insert(0, os.getcwd())
           import research.analyze_shas_city_students as model
 
+          session = requests.Session()
+          session.headers.update({'User-Agent': 'shas-city-students/1.0', 'Accept': 'application/json'})
+
+          def fetch_datastore(resource_id, filters=None, page_size=10000):
+              rows = []
+              offset = 0
+              fields = []
+              total = None
+              while True:
+                  params = {'resource_id': resource_id, 'limit': page_size, 'offset': offset}
+                  if filters:
+                      params['filters'] = json.dumps(filters, ensure_ascii=False)
+                  response = session.get('https://data.gov.il/api/3/action/datastore_search', params=params, timeout=180)
+                  response.raise_for_status()
+                  payload = response.json()
+                  if not payload.get('success'):
+                      raise RuntimeError(payload)
+                  result = payload['result']
+                  if total is None:
+                      total = int(result.get('total') or 0)
+                      fields = result.get('fields', [])
+                      print('resource', resource_id, 'total', total, 'fields', [f.get('id') for f in fields])
+                  batch = result.get('records', [])
+                  rows.extend(batch)
+                  print('resource', resource_id, 'fetched', len(rows), 'of', total)
+                  if not batch or len(rows) >= total or len(batch) < page_size:
+                      break
+                  offset += len(batch)
+              return pd.DataFrame(rows), {'total': total, 'rows_fetched': len(rows), 'fields': fields}
+
           def read_official_ballots():
-              frame, _ = model.fetch_datastore('cc223336-07bc-485d-b160-62df92967c0a')
+              frame, _ = fetch_datastore('cc223336-07bc-485d-b160-62df92967c0a')
               return frame
 
           def read_official_education():
-              return model.fetch_datastore('5548fd63-5868-4053-ad81-98caddc5e232')
+              return fetch_datastore('5548fd63-5868-4053-ad81-98caddc5e232', filters={'שנה': 2022})
 
           model.read_ballots = read_official_ballots
           model.read_official_education = read_official_education
