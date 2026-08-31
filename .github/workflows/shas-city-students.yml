@@ -32,7 +32,7 @@ jobs:
           model.read_ballots = read_official_ballots
           model.main()
           PY
-          uv run /tmp/run_city_model.py
+          uv run --with numpy --with pandas --with requests --with openpyxl /tmp/run_city_model.py
       - name: List outputs
         if: always()
         run: find research/city_student_output -maxdepth 1 -type f -printf '%f %s bytes\n' || true
