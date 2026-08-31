@@ -1,4 +1,4 @@
-name: Inspect ED-DATA institution endpoints
+name: Inspect official Shkifut endpoints
 
 on:
   workflow_dispatch:
@@ -9,76 +9,92 @@ on:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Fetch and inspect site assets
+      - name: Install Playwright
         run: |
-          mkdir -p eddata_inspect
-          python - <<'PY'
-          import html, json, os, re, urllib.parse, urllib.request
+          python -m pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+      - name: Capture network calls from official Transparency site
+        run: |
+          mkdir -p shkifut_inspect
+          cat > /tmp/inspect_shkifut.py <<'PY'
+          import json
+          import re
           from pathlib import Path
+          from urllib.parse import urlparse
+          from playwright.sync_api import sync_playwright
 
-          root='https://mos.eddata.live/'
-          out=Path('eddata_inspect')
-          opener=urllib.request.build_opener()
-          opener.addheaders=[('User-Agent','Mozilla/5.0 research-bot'),('Accept','*/*')]
-
-          def fetch(url):
-              print('FETCH',url)
-              with opener.open(url,timeout=90) as r:
-                  return r.read(), r.headers.get('content-type','')
-
-          raw,ct=fetch(root)
-          (out/'index.html').write_bytes(raw)
-          text=raw.decode('utf-8','replace')
-          print('HOME_BYTES',len(raw),'CT',ct)
-          srcs=[]
-          for pat in [r'<script[^>]+src=["\']([^"\']+)', r'<link[^>]+href=["\']([^"\']+)']:
-              srcs += re.findall(pat,text,re.I)
-          urls=[]
-          for s in srcs:
-              u=urllib.parse.urljoin(root,html.unescape(s))
-              if u.startswith(root): urls.append(u)
-          print('ASSETS',json.dumps(urls,ensure_ascii=False,indent=2))
-          findings=[]
-          for i,u in enumerate(dict.fromkeys(urls)):
-              try:
-                  data,ct=fetch(u)
-                  suffix='.js' if 'javascript' in ct or u.endswith('.js') else '.txt'
-                  p=out/f'asset_{i}{suffix}'
-                  p.write_bytes(data)
-                  t=data.decode('utf-8','replace')
-                  hits=[]
-                  patterns=[
-                      r'https?://[^"\'\s)]+',
-                      r'["\']([^"\']+\.(?:json|csv|xlsx|parquet)(?:\?[^"\']*)?)["\']',
-                      r'["\'](/[^"\']*(?:api|data|school|institution|mosad|mosdot)[^"\']*)["\']',
-                      r'fetch\(([^)]{1,300})\)',
-                  ]
-                  for pat in patterns:
-                      for m in re.finditer(pat,t,re.I):
-                          val=m.group(1) if m.lastindex else m.group(0)
-                          if val not in hits: hits.append(val)
-                  findings.append({'url':u,'bytes':len(data),'content_type':ct,'hits':hits[:500]})
-              except Exception as e:
-                  findings.append({'url':u,'error':repr(e)})
-          # Search HTML too.
-          html_hits=[]
-          for pat in [r'https?://[^"\'\s<]+', r'["\']([^"\']+\.(?:json|csv|xlsx|parquet)[^"\']*)["\']']:
-              for m in re.finditer(pat,text,re.I):
-                  val=m.group(1) if m.lastindex else m.group(0)
-                  if val not in html_hits: html_hits.append(val)
-          result={'home_hits':html_hits[:500],'assets':findings}
-          (out/'findings.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
-          print('FINDINGS_START')
-          print(json.dumps(result,ensure_ascii=False,indent=2)[:150000])
-          print('FINDINGS_END')
+          out=Path('shkifut_inspect')
+          targets=[
+              'https://shkifut.education.gov.il/',
+              'https://shkifut.education.gov.il/school/800144',
+              'https://shkifut.education.gov.il/school/514927',
+              'https://shkifut.education.gov.il/school/800144/budget',
+          ]
+          records=[]
+          saved=0
+          with sync_playwright() as p:
+              browser=p.chromium.launch(headless=True)
+              context=browser.new_context(
+                  locale='he-IL',
+                  timezone_id='Asia/Jerusalem',
+                  user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+                  viewport={'width':1440,'height':1200},
+              )
+              page=context.new_page()
+              def on_response(resp):
+                  nonlocal_saved = None
+                  rec={'url':resp.url,'status':resp.status,'content_type':resp.headers.get('content-type',''),'resource_type':resp.request.resource_type}
+                  try:
+                      clen=int(resp.headers.get('content-length','0') or 0)
+                  except Exception:
+                      clen=0
+                  rec['content_length']=clen
+                  records.append(rec)
+                  if ('json' in rec['content_type'].lower() or resp.request.resource_type in {'xhr','fetch'}) and resp.status < 400:
+                      try:
+                          body=resp.body()
+                          if len(body) <= 5_000_000:
+                              global saved
+                              saved += 1
+                              name=f'response_{saved:04d}.txt'
+                              (out/name).write_bytes(body)
+                              rec['saved_as']=name
+                              rec['body_prefix']=body[:500].decode('utf-8','replace')
+                      except Exception as e:
+                          rec['body_error']=repr(e)
+              page.on('response', on_response)
+              for i,url in enumerate(targets):
+                  try:
+                      print('NAVIGATE',url)
+                      resp=page.goto(url,wait_until='domcontentloaded',timeout=120000)
+                      page.wait_for_timeout(12000)
+                      print('RESULT',resp.status if resp else None,page.url,page.title())
+                      (out/f'page_{i}.html').write_text(page.content(),encoding='utf-8')
+                      page.screenshot(path=str(out/f'page_{i}.png'),full_page=True)
+                  except Exception as e:
+                      print('NAV_ERROR',url,repr(e))
+              browser.close()
+          # Extract candidate endpoints and year-related strings.
+          candidate=[]
+          for r in records:
+              u=r['url']
+              if any(x in u.lower() for x in ['api','school','mosad','institution','education','shkifut','budget','year']):
+                  candidate.append(r)
+          report={'targets':targets,'responses':records,'candidates':candidate}
+          (out/'network.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+          print(json.dumps({'total_responses':len(records),'saved':saved,'candidates':candidate},ensure_ascii=False,indent=2)[:200000])
           PY
+          python /tmp/inspect_shkifut.py
+          find shkifut_inspect -maxdepth 1 -type f -printf '%f %s bytes\n'
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: eddata-inspection
-          path: eddata_inspect/
-          retention-days: 3
+          name: shkifut-network-inspection
+          path: shkifut_inspect/
+          retention-days: 7
+          if-no-files-found: warn
