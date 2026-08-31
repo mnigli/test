@@ -1,0 +1,84 @@
+name: Inspect ED-DATA institution endpoints
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/inspect-eddata.yml'
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch and inspect site assets
+        run: |
+          mkdir -p eddata_inspect
+          python - <<'PY'
+          import html, json, os, re, urllib.parse, urllib.request
+          from pathlib import Path
+
+          root='https://mos.eddata.live/'
+          out=Path('eddata_inspect')
+          opener=urllib.request.build_opener()
+          opener.addheaders=[('User-Agent','Mozilla/5.0 research-bot'),('Accept','*/*')]
+
+          def fetch(url):
+              print('FETCH',url)
+              with opener.open(url,timeout=90) as r:
+                  return r.read(), r.headers.get('content-type','')
+
+          raw,ct=fetch(root)
+          (out/'index.html').write_bytes(raw)
+          text=raw.decode('utf-8','replace')
+          print('HOME_BYTES',len(raw),'CT',ct)
+          srcs=[]
+          for pat in [r'<script[^>]+src=["\']([^"\']+)', r'<link[^>]+href=["\']([^"\']+)']:
+              srcs += re.findall(pat,text,re.I)
+          urls=[]
+          for s in srcs:
+              u=urllib.parse.urljoin(root,html.unescape(s))
+              if u.startswith(root): urls.append(u)
+          print('ASSETS',json.dumps(urls,ensure_ascii=False,indent=2))
+          findings=[]
+          for i,u in enumerate(dict.fromkeys(urls)):
+              try:
+                  data,ct=fetch(u)
+                  suffix='.js' if 'javascript' in ct or u.endswith('.js') else '.txt'
+                  p=out/f'asset_{i}{suffix}'
+                  p.write_bytes(data)
+                  t=data.decode('utf-8','replace')
+                  hits=[]
+                  patterns=[
+                      r'https?://[^"\'\s)]+',
+                      r'["\']([^"\']+\.(?:json|csv|xlsx|parquet)(?:\?[^"\']*)?)["\']',
+                      r'["\'](/[^"\']*(?:api|data|school|institution|mosad|mosdot)[^"\']*)["\']',
+                      r'fetch\(([^)]{1,300})\)',
+                  ]
+                  for pat in patterns:
+                      for m in re.finditer(pat,t,re.I):
+                          val=m.group(1) if m.lastindex else m.group(0)
+                          if val not in hits: hits.append(val)
+                  findings.append({'url':u,'bytes':len(data),'content_type':ct,'hits':hits[:500]})
+              except Exception as e:
+                  findings.append({'url':u,'error':repr(e)})
+          # Search HTML too.
+          html_hits=[]
+          for pat in [r'https?://[^"\'\s<]+', r'["\']([^"\']+\.(?:json|csv|xlsx|parquet)[^"\']*)["\']']:
+              for m in re.finditer(pat,text,re.I):
+                  val=m.group(1) if m.lastindex else m.group(0)
+                  if val not in html_hits: html_hits.append(val)
+          result={'home_hits':html_hits[:500],'assets':findings}
+          (out/'findings.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+          print('FINDINGS_START')
+          print(json.dumps(result,ensure_ascii=False,indent=2)[:150000])
+          print('FINDINGS_END')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eddata-inspection
+          path: eddata_inspect/
+          retention-days: 3
