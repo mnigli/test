@@ -9,18 +9,23 @@ on:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Download and inspect JSON datasets
+      - name: Install Playwright
+        run: |
+          python -m pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+      - name: Fetch JSON through browser context
         run: |
           mkdir -p eddata_files
-          python - <<'PY'
-          import json, re, urllib.request
+          cat > /tmp/fetch_eddata.py <<'PY'
+          import json
           from collections import Counter
           from pathlib import Path
+          from playwright.sync_api import sync_playwright
 
           root='https://mos.eddata.live/'
           paths=[
@@ -35,8 +40,6 @@ jobs:
             'data/ownership_affiliations.json',
           ]
           out=Path('eddata_files')
-          opener=urllib.request.build_opener()
-          opener.addheaders=[('User-Agent','Mozilla/5.0 research-bot'),('Accept','application/json')]
 
           def summarize(obj):
             s={'type':type(obj).__name__}
@@ -53,52 +56,67 @@ jobs:
             return s
 
           report={}
-          for path in paths:
-            url=root+path
-            try:
-              print('FETCH',url)
-              with opener.open(url,timeout=180) as r: raw=r.read()
-              dest=out/Path(path).name
-              dest.write_bytes(raw)
-              obj=json.loads(raw)
-              info=summarize(obj); info['bytes']=len(raw)
-              # Shallow record field inventory.
-              records=[]
-              if isinstance(obj,list): records=obj
-              elif isinstance(obj,dict):
-                for key in ['institutions','records','items','data','schools','rows']:
-                  if isinstance(obj.get(key),list): records=obj[key]; info['record_container']=key; break
-                if not records:
-                  # dictionary keyed by id
-                  vals=list(obj.values())
-                  if vals and isinstance(vals[0],dict): records=vals; info['record_container']='dict_values'
-              if records:
-                fields=Counter()
-                years=Counter(); supervision=Counter(); network=Counter(); types=Counter()
-                for row in records[:100000]:
-                  if not isinstance(row,dict): continue
-                  fields.update(row.keys())
-                  for k,v in row.items():
-                    kl=str(k).lower()
-                    if 'year' in kl or 'שנה' in kl: years[str(v)] += 1
-                    if 'supervision' in kl or 'פיקוח' in kl: supervision[str(v)] += 1
-                    if 'network' in kl or 'רשת' in kl or 'ownership' in kl: network[str(v)] += 1
-                    if 'type' in kl or 'שלב' in kl or 'frame' in kl: types[str(v)] += 1
-                info['record_fields']=fields.most_common(100)
-                info['year_values']=years.most_common(30)
-                info['supervision_values']=supervision.most_common(30)
-                info['network_values']=network.most_common(30)
-                info['type_values']=types.most_common(30)
-              report[path]=info
-            except Exception as e:
-              report[path]={'error':repr(e)}
+          with sync_playwright() as p:
+            browser=p.chromium.launch(headless=True)
+            context=browser.new_context(
+              locale='he-IL',
+              user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+            )
+            page=context.new_page()
+            page.goto(root, wait_until='networkidle', timeout=120000)
+            print('HOME', page.title(), page.url)
+            for path in paths:
+              try:
+                result=page.evaluate("""async (path) => {
+                  const r = await fetch(path, {cache:'no-store', credentials:'same-origin'});
+                  return {status:r.status, ok:r.ok, contentType:r.headers.get('content-type'), text:await r.text()};
+                }""", path)
+                print('FETCH',path,'STATUS',result['status'],'BYTES',len(result['text']))
+                if not result['ok']:
+                  report[path]={'status':result['status'],'text':result['text'][:500]}
+                  continue
+                raw=result['text']
+                (out/Path(path).name).write_text(raw,encoding='utf-8')
+                obj=json.loads(raw)
+                info=summarize(obj); info['bytes']=len(raw.encode('utf-8')); info['status']=result['status']
+                records=[]
+                if isinstance(obj,list): records=obj
+                elif isinstance(obj,dict):
+                  for key in ['institutions','records','items','data','schools','rows']:
+                    if isinstance(obj.get(key),list): records=obj[key]; info['record_container']=key; break
+                  if not records:
+                    vals=list(obj.values())
+                    if vals and isinstance(vals[0],dict): records=vals; info['record_container']='dict_values'
+                if records:
+                  fields=Counter(); years=Counter(); supervision=Counter(); network=Counter(); types=Counter()
+                  for row in records[:100000]:
+                    if not isinstance(row,dict): continue
+                    fields.update(row.keys())
+                    for k,v in row.items():
+                      kl=str(k).lower()
+                      if 'year' in kl or 'שנה' in kl: years[str(v)] += 1
+                      if 'supervision' in kl or 'פיקוח' in kl: supervision[str(v)] += 1
+                      if 'network' in kl or 'רשת' in kl or 'ownership' in kl: network[str(v)] += 1
+                      if 'type' in kl or 'שלב' in kl or 'frame' in kl: types[str(v)] += 1
+                  info['record_fields']=fields.most_common(120)
+                  info['year_values']=years.most_common(40)
+                  info['supervision_values']=supervision.most_common(40)
+                  info['network_values']=network.most_common(40)
+                  info['type_values']=types.most_common(40)
+                report[path]=info
+              except Exception as e:
+                report[path]={'error':repr(e)}
+            browser.close()
           (out/'inspection_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
           print('REPORT_START')
-          print(json.dumps(report,ensure_ascii=False,indent=2)[:250000])
+          print(json.dumps(report,ensure_ascii=False,indent=2)[:300000])
           print('REPORT_END')
           PY
+          python /tmp/fetch_eddata.py
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: eddata-files
+          name: eddata-files-browser
           path: eddata_files/
           retention-days: 5
+          if-no-files-found: warn
