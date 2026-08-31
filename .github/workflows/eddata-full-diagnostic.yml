@@ -1,0 +1,69 @@
+name: ED-DATA full diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/eddata-full-diagnostic.yml'
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download public ED-DATA files and site assets
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          for f in institutions.json institutions_browse.json authorities.json national_stats.json institution_registry.json data-manifest.json; do
+            curl -fL --retry 3 --connect-timeout 30 --max-time 300 "https://mos.eddata.live/data/$f" -o "out/$f" || true
+          done
+          curl -fL --retry 3 --connect-timeout 30 --max-time 120 https://mos.eddata.live/ -o out/index.html || true
+          grep -oE 'src="[^"]+\.js[^"]*"' out/index.html | sed 's/src="//;s/"$//' > out/js-assets.txt || true
+          while IFS= read -r asset; do
+            [ -z "$asset" ] && continue
+            case "$asset" in
+              http*) url="$asset" ;;
+              /*) url="https://mos.eddata.live$asset" ;;
+              *) url="https://mos.eddata.live/$asset" ;;
+            esac
+            name=$(echo "$asset" | tr '/?&=' '____')
+            curl -fL --retry 2 --connect-timeout 20 --max-time 120 "$url" -o "out/$name" || true
+          done < out/js-assets.txt
+          python - <<'PY'
+          import json, os, re
+          report={}
+          for fn in ['institutions.json','institutions_browse.json','authorities.json','national_stats.json','institution_registry.json','data-manifest.json']:
+            p='out/'+fn
+            if not os.path.exists(p):
+              report[fn]={'missing':True}; continue
+            report[fn]={'bytes':os.path.getsize(p)}
+            try:
+              obj=json.load(open(p,encoding='utf-8'))
+              report[fn]['type']=type(obj).__name__
+              report[fn]['keys']=list(obj)[:80] if isinstance(obj,dict) else None
+              report[fn]['length']=len(obj) if hasattr(obj,'__len__') else None
+              if fn=='institutions.json':
+                inst=obj.get('institutions',obj) if isinstance(obj,dict) else obj
+                sample=inst[0] if isinstance(inst,list) and inst else None
+                report[fn]['sample_keys']=list(sample) if isinstance(sample,dict) else None
+                report[fn]['sample']=sample
+                key_counts={}
+                for row in (inst[:1000] if isinstance(inst,list) else []):
+                  for k in row: key_counts[k]=key_counts.get(k,0)+1
+                report[fn]['key_counts_1000']=key_counts
+            except Exception as e:
+              report[fn]['json_error']=repr(e)
+          text='\n'.join(open('out/'+x,encoding='utf-8',errors='ignore').read() for x in os.listdir('out') if x.endswith('.js'))
+          patterns=['students','student','תלמיד','history','historical','2022','schoolYear','dataYear','shkifut','api']
+          report['js_matches']={p:len(re.findall(re.escape(p),text,re.I)) for p in patterns}
+          open('out/diagnostic.json','w',encoding='utf-8').write(json.dumps(report,ensure_ascii=False,indent=2,default=str))
+          print(json.dumps(report,ensure_ascii=False,indent=2,default=str)[:50000])
+          PY
+          find out -maxdepth 1 -type f -printf '%f %s bytes\n'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eddata-full-diagnostic
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
