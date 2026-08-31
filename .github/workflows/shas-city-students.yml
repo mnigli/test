@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v5
-      - name: Run with official election datastore
+      - name: Run with official election and education datastores
         run: |
           cat > /tmp/run_city_model.py <<'PY'
           import os
@@ -29,7 +29,11 @@ jobs:
               frame, _ = model.fetch_datastore('cc223336-07bc-485d-b160-62df92967c0a')
               return frame
 
+          def read_official_education():
+              return model.fetch_datastore('5548fd63-5868-4053-ad81-98caddc5e232')
+
           model.read_ballots = read_official_ballots
+          model.read_official_education = read_official_education
           model.main()
           PY
           uv run --with numpy --with pandas --with requests --with openpyxl /tmp/run_city_model.py
