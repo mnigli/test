@@ -1,0 +1,23 @@
+name: Fetch ballot location mappings
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fetch-ballot-locations.yml'
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download mappings
+        run: |
+          mkdir -p ballot_locations
+          curl -fL --retry 3 -o ballot_locations/ballot_locations_24.json https://raw.githubusercontent.com/harelc/elections-vote-transfer/master/data/ballot_locations_24.json
+          curl -fL --retry 3 -o ballot_locations/ballot_locations_25.json https://raw.githubusercontent.com/harelc/elections-vote-transfer/master/data/ballot_locations_25.json
+          ls -lh ballot_locations
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ballot-location-mappings
+          path: ballot_locations/
+          retention-days: 7
