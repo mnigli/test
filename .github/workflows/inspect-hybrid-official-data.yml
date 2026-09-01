@@ -1,0 +1,65 @@
+name: Inspect hybrid official data schemas
+
+on:
+  push:
+    paths:
+      - '.github/workflows/inspect-hybrid-official-data.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --quiet pandas requests
+      - name: Fetch and inspect
+        run: |
+          python research/fetch_official_election_ballots.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import pandas as pd
+          import requests
+
+          root=Path('research/official_ballots')
+          print('FILES', [p.name for p in root.glob('*')])
+          for election in [24,25]:
+              p=root/f'ballot{election}_official.csv'
+              df=pd.read_csv(p, encoding='utf-8-sig', dtype=str)
+              print('\nCSV',election,'SHAPE',df.shape)
+              print('COLUMNS',json.dumps(list(df.columns),ensure_ascii=False))
+              print('FIRST',json.dumps(df.head(2).to_dict(orient='records'),ensure_ascii=False)[:10000])
+              city_col='שם ישוב'
+              if city_col in df.columns:
+                  bat=df[df[city_col].astype(str).str.contains('בת ים',na=False)]
+                  print('BAT_YAM_ROWS',len(bat))
+                  print('BAT_YAM_SAMPLE',json.dumps(bat.head(3).to_dict(orient='records'),ensure_ascii=False)[:10000])
+
+          for election in [24,25]:
+              url=f'https://raw.githubusercontent.com/harelc/elections-vote-transfer/master/data/ballot_locations_{election}.json'
+              obj=requests.get(url,timeout=120).json()
+              print('\nLOC',election,'TYPE',type(obj).__name__,'LEN',len(obj))
+              if isinstance(obj,dict):
+                  print('TOP_KEYS',json.dumps(list(obj)[:20],ensure_ascii=False))
+                  samples=[]
+                  for k,v in list(obj.items())[:3]: samples.append([k,v])
+                  print('SAMPLES',json.dumps(samples,ensure_ascii=False)[:20000])
+                  hits=[]
+                  def scan(x,path=''):
+                      if len(hits)>=5: return
+                      if isinstance(x,dict):
+                          text=' '.join(str(v) for v in x.values() if not isinstance(v,(dict,list)))
+                          if 'בת ים' in text:
+                              hits.append((path,x))
+                          for k,v in x.items(): scan(v,path+'/'+str(k))
+                      elif isinstance(x,list):
+                          for i,v in enumerate(x): scan(v,path+f'/{i}')
+                  scan(obj)
+                  print('BAT_YAM_HITS',json.dumps(hits,ensure_ascii=False)[:30000])
+              else:
+                  print('SAMPLES',json.dumps(obj[:3],ensure_ascii=False)[:20000])
+          PY
